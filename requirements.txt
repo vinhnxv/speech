@@ -1,0 +1,7 @@
+openai
+numpy
+requests
+soundfile
+torch
+torchaudio
+transformers
