@@ -26,9 +26,9 @@ python qwen/qwen3-asr/qwen3_asr_torch.py [audio_path] [language]
 # requires: pip install "nemo_toolkit[asr]"
 python nvidia/nemotron-speech-streaming/nemotron_streaming_torch.py [audio_path]
 
-# Higgs Audio v3 TTS (remote sglang-omni server) — voice-cloned Vietnamese speech
+# Higgs Audio v3 TTS (sglang-omni server, default http://localhost:8000) — voice-cloned Vietnamese speech
 # serves the reference voice over a temp HTTP server so the TTS host can fetch it
-HIGGS_HOST=http://100.114.239.66:8000 \
+# set HIGGS_HOST to point at a remote server, e.g. HIGGS_HOST=http://<server-ip>:8000
 python higgs-audio/client/higgs_tts_vi.py [text_file] [ref_audio] [ref_text_file] [output_wav]
 ```
 
