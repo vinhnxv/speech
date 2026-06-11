@@ -4,4 +4,8 @@ requests
 soundfile
 torch
 torchaudio
-transformers
+transformers>=5.4.0
+sentencepiece
+protobuf
+librosa
+qwen-asr
