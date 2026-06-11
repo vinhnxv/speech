@@ -31,11 +31,16 @@ python nvidia/nemotron-speech-streaming/nemotron_streaming_torch.py [audio_path]
 # override with OMLX_HOST / OMLX_API_KEY / GEMMA_MODEL
 python google/gemma-4/gemma4_audio_omlx.py [audio_path] [language]
 
+# local transformers variant: default google/gemma-4-E4B-it (better Vietnamese than the oMLX path)
+# override with GEMMA_MODEL=google/gemma-4-12B-it (needs ~24GB+ free RAM)
+python google/gemma-4/gemma4_audio_torch.py [audio_path] [language]
+
 # Higgs Audio v3 TTS (sglang-omni server, default http://localhost:8000) — voice-cloned Vietnamese speech
 # serves the reference voice over a temp HTTP server so the TTS host can fetch it
 # set HIGGS_HOST to point at a remote server, e.g. HIGGS_HOST=http://<server-ip>:8000
 python higgs-audio/client/higgs_tts_vi.py [text_file] [ref_audio] [ref_text_file] [output_wav]
 ```
 
-> ⚠️ Dependency conflict: cohere needs `transformers>=5.4`, qwen-asr pins `==4.57.6`,
-> nemo_toolkit wants `4.53.x` — use a separate virtualenv per model family.
+> ⚠️ Dependency conflict: cohere/gemma need `transformers>=5.4`, qwen-asr pins `==4.57.6`,
+> nemo_toolkit wants `4.53.x` — `requirements.txt` covers the `>=5.4` family;
+> install qwen-asr and nemo_toolkit in their own virtualenvs (see comments in requirements.txt).
