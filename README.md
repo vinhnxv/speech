@@ -26,6 +26,11 @@ python qwen/qwen3-asr/qwen3_asr_torch.py [audio_path] [language]
 # requires: pip install "nemo_toolkit[asr]"
 python nvidia/nemotron-speech-streaming/nemotron_streaming_torch.py [audio_path]
 
+# Gemma 4 audio understanding (transcription/translation, 30s max per chunk — auto-chunked)
+# via oMLX OpenAI-compatible server (default http://127.0.0.1:1234/v1, model gemma-4-12B-it-8bit)
+# override with OMLX_HOST / OMLX_API_KEY / GEMMA_MODEL
+python google/gemma-4/gemma4_audio_omlx.py [audio_path] [language]
+
 # Higgs Audio v3 TTS (sglang-omni server, default http://localhost:8000) — voice-cloned Vietnamese speech
 # serves the reference voice over a temp HTTP server so the TTS host can fetch it
 # set HIGGS_HOST to point at a remote server, e.g. HIGGS_HOST=http://<server-ip>:8000
