@@ -25,6 +25,11 @@ python qwen/qwen3-asr/qwen3_asr_torch.py [audio_path] [language]
 # NVIDIA Nemotron Speech Streaming (en only) — segment/word timestamps, writes .srt
 # requires: pip install "nemo_toolkit[asr]"
 python nvidia/nemotron-speech-streaming/nemotron_streaming_torch.py [audio_path]
+
+# Higgs Audio v3 TTS (remote sglang-omni server) — voice-cloned Vietnamese speech
+# serves the reference voice over a temp HTTP server so the TTS host can fetch it
+HIGGS_HOST=http://100.114.239.66:8000 \
+python higgs-audio/client/higgs_tts_vi.py [text_file] [ref_audio] [ref_text_file] [output_wav]
 ```
 
 > ⚠️ Dependency conflict: cohere needs `transformers>=5.4`, qwen-asr pins `==4.57.6`,
