@@ -39,8 +39,16 @@ python google/gemma-4/gemma4_audio_torch.py [audio_path] [language]
 # serves the reference voice over a temp HTTP server so the TTS host can fetch it
 # set HIGGS_HOST to point at a remote server, e.g. HIGGS_HOST=http://<server-ip>:8000
 python higgs-audio/client/higgs_tts_vi.py [text_file] [ref_audio] [ref_text_file] [output_wav]
+
+# VieNeu-TTS v3 Turbo (on-device Vietnamese TTS, 48 kHz, torch-free ONNX on CPU)
+# runs locally — first call downloads the ~0.1B model from HF and caches it
+# needs its own venv (see requirements.txt): pyenv virtualenv 3.14.5 vieneu && pip install vieneu
+python pnnbao-ump/vieneu-tts/vieneu_tts_onnx.py [text_or_txt_file] [--voice NAME | --clone ref.wav] [-o out.wav]
+python pnnbao-ump/vieneu-tts/vieneu_tts_onnx.py --list   # list the 10 built-in preset voices
 ```
 
 > ⚠️ Dependency conflict: cohere/gemma need `transformers>=5.4`, qwen-asr pins `==4.57.6`,
 > nemo_toolkit wants `4.53.x` — `requirements.txt` covers the `>=5.4` family;
 > install qwen-asr and nemo_toolkit in their own virtualenvs (see comments in requirements.txt).
+> VieNeu-TTS is torch-free but pulls its own stack (onnxruntime, gradio, sea-g2p),
+> so install it in a separate `vieneu` virtualenv too.
