@@ -60,22 +60,27 @@ def test_timestamp_rollover():
     assert len(result["words"]) == 5
     assert result["words"][0]["text"] == "hello"
     assert result["words"][0]["start_time"] == 0.0
+    assert result["words"][0]["start_time_source"] == "silence_boundary"
     assert result["words"][0]["end_time"] == 0.45
     assert result["words"][1]["text"] == "world"
     assert result["words"][1]["start_time"] == 0.45
+    assert result["words"][1]["start_time_source"] == "contiguous"
     assert result["words"][1]["end_time"] == 0.82
     # Silence marker
     assert result["words"][2]["text"] == "_"
     assert result["words"][2]["start_time"] == 0.82
+    assert result["words"][2]["start_time_source"] == "contiguous"
     assert result["words"][2]["is_silence"] is True
     assert result["words"][2]["end_time"] == 9.5
     # Rollover: [T:50] = 0.5s + offset 10 = 10.5s
     assert result["words"][3]["text"] == "test"
     assert result["words"][3]["start_time"] == 9.5
+    assert result["words"][3]["start_time_source"] == "silence_boundary"
     assert result["words"][3]["end_time"] == 10.5
     # [T:100] = 1.0s + offset 10 = 11.0s
     assert result["words"][4]["text"] == "word"
     assert result["words"][4]["start_time"] == 10.5
+    assert result["words"][4]["start_time_source"] == "contiguous"
     assert result["words"][4]["end_time"] == 11.0
     # Verify at least one word exceeds 10.0
     assert any(w["end_time"] > 10.0 for w in result["words"])
@@ -145,23 +150,28 @@ def test_combined_exact_match():
     # hello → speaker 1
     assert combined["words"][0]["text"] == "hello"
     assert combined["words"][0]["start_time"] == 0.0
+    assert combined["words"][0]["start_time_source"] == "silence_boundary"
     assert combined["words"][0]["speaker_id"] == 1
     # world → speaker 1
     assert combined["words"][1]["text"] == "world"
     assert combined["words"][1]["start_time"] == 0.5
+    assert combined["words"][1]["start_time_source"] == "contiguous"
     assert combined["words"][1]["speaker_id"] == 1
     # silence _ inherits speaker 1 (last non-silence speaker)
     assert combined["words"][2]["text"] == "_"
     assert combined["words"][2]["start_time"] == 1.0
+    assert combined["words"][2]["start_time_source"] == "contiguous"
     assert combined["words"][2]["is_silence"] is True
     assert combined["words"][2]["speaker_id"] == 1
     # test → speaker 2
     assert combined["words"][3]["text"] == "test"
     assert combined["words"][3]["start_time"] == 1.5
+    assert combined["words"][3]["start_time_source"] == "silence_boundary"
     assert combined["words"][3]["speaker_id"] == 2
     # word → speaker 2
     assert combined["words"][4]["text"] == "word"
     assert combined["words"][4]["start_time"] == 2.0
+    assert combined["words"][4]["start_time_source"] == "contiguous"
     assert combined["words"][4]["speaker_id"] == 2
     print("✓ Combined exact match test passed")
 

@@ -86,6 +86,7 @@ def parse_timestamps(text, duration=None):
     last_end = 0.0
     offset = 0.0
     prev_end = 0.0  # end_time of previous word → start_time of current
+    prev_was_silence = True  # first word starts after implicit silence at 0
 
     word_parts = ts_parts[::2]
     tag_parts = ts_parts[1::2]
@@ -118,13 +119,20 @@ def parse_timestamps(text, duration=None):
 
         is_silence = word_text == "_"
 
+        # start_time source: "silence_boundary" if previous token was silence
+        # (reliable — the word starts after the marked gap), "contiguous" if
+        # previous token was a real word (estimated — no explicit gap from model).
+        start_source = "silence_boundary" if prev_was_silence else "contiguous"
+
         words.append({
             "text": word_text,
             "start_time": round(prev_end, 2),
+            "start_time_source": start_source,
             "end_time": round(abs_time, 2),
             "is_silence": is_silence,
         })
         prev_end = abs_time
+        prev_was_silence = is_silence
 
     return {"words": words}
 
@@ -172,6 +180,7 @@ def parse_combined(saa_result, ts_result):
             combined_words.append({
                 "text": ts_w["text"],
                 "start_time": ts_w["start_time"],
+                "start_time_source": ts_w["start_time_source"],
                 "end_time": ts_w["end_time"],
                 "is_silence": ts_w["is_silence"],
                 "speaker_id": speaker_id,
@@ -188,6 +197,7 @@ def parse_combined(saa_result, ts_result):
                 combined_words.append({
                     "text": ts_w["text"],
                     "start_time": ts_w["start_time"],
+                    "start_time_source": ts_w["start_time_source"],
                     "end_time": ts_w["end_time"],
                     "is_silence": ts_w["is_silence"],
                     "speaker_id": None,
@@ -217,6 +227,7 @@ def parse_combined(saa_result, ts_result):
                     combined_words.append({
                         "text": ts_w["text"],
                         "start_time": ts_w["start_time"],
+                        "start_time_source": ts_w["start_time_source"],
                         "end_time": ts_w["end_time"],
                         "is_silence": ts_w["is_silence"],
                         "speaker_id": turn["speaker_id"],
@@ -231,6 +242,7 @@ def parse_combined(saa_result, ts_result):
                 combined_words.append({
                     "text": ts_w["text"],
                     "start_time": ts_w["start_time"],
+                    "start_time_source": ts_w["start_time_source"],
                     "end_time": ts_w["end_time"],
                     "is_silence": ts_w["is_silence"],
                     "speaker_id": saa_turns[-1]["speaker_id"] if saa_turns else None,
