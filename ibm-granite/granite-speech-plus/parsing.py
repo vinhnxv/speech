@@ -85,6 +85,7 @@ def parse_timestamps(text, duration=None):
     words = []
     last_end = 0.0
     offset = 0.0
+    prev_end = 0.0  # end_time of previous word → start_time of current
 
     word_parts = ts_parts[::2]
     tag_parts = ts_parts[1::2]
@@ -119,9 +120,11 @@ def parse_timestamps(text, duration=None):
 
         words.append({
             "text": word_text,
+            "start_time": round(prev_end, 2),
             "end_time": round(abs_time, 2),
             "is_silence": is_silence,
         })
+        prev_end = abs_time
 
     return {"words": words}
 
@@ -168,6 +171,7 @@ def parse_combined(saa_result, ts_result):
                 last_speaker = speaker_id
             combined_words.append({
                 "text": ts_w["text"],
+                "start_time": ts_w["start_time"],
                 "end_time": ts_w["end_time"],
                 "is_silence": ts_w["is_silence"],
                 "speaker_id": speaker_id,
@@ -183,6 +187,7 @@ def parse_combined(saa_result, ts_result):
             for ts_w in ts_words:
                 combined_words.append({
                     "text": ts_w["text"],
+                    "start_time": ts_w["start_time"],
                     "end_time": ts_w["end_time"],
                     "is_silence": ts_w["is_silence"],
                     "speaker_id": None,
@@ -211,6 +216,7 @@ def parse_combined(saa_result, ts_result):
                     ts_w = ts_words[ts_idx]
                     combined_words.append({
                         "text": ts_w["text"],
+                        "start_time": ts_w["start_time"],
                         "end_time": ts_w["end_time"],
                         "is_silence": ts_w["is_silence"],
                         "speaker_id": turn["speaker_id"],
@@ -224,6 +230,7 @@ def parse_combined(saa_result, ts_result):
                 ts_w = ts_words[ts_idx]
                 combined_words.append({
                     "text": ts_w["text"],
+                    "start_time": ts_w["start_time"],
                     "end_time": ts_w["end_time"],
                     "is_silence": ts_w["is_silence"],
                     "speaker_id": saa_turns[-1]["speaker_id"] if saa_turns else None,
