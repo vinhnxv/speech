@@ -1,158 +1,15 @@
-"""Standalone test of parsing functions from granite_speech_plus_torch.py.
+"""Standalone tests for Granite Speech 4.1 2B Plus parsing functions.
 
-Tests the parsing logic without needing the model loaded.
+Imports from parsing.py so tests exercise the exact same code path as the script,
+without needing torch/transformers loaded.
 """
-import re
+
 import json
+import os
+import tempfile
 
-# Replicate the parsing functions from the script
+from parsing import parse_asr, parse_saa, parse_timestamps, parse_combined
 
-def parse_asr(text):
-    return {"transcript": text.strip()}
-
-
-def parse_saa(text):
-    parts = re.split(r"(\[Speaker \d+\]:)", text)
-    speakers = []
-    speaker_ids = set()
-    current_speaker = None
-    current_text = ""
-    for part in parts:
-        part = part.strip()
-        if not part:
-            continue
-        match = re.match(r"\[Speaker (\d+)\]:", part)
-        if match:
-            if current_speaker is not None:
-                speakers.append({
-                    "speaker_id": current_speaker,
-                    "text": current_text.strip(),
-                    "turn_order": len(speakers),
-                })
-            current_speaker = int(match.group(1))
-            speaker_ids.add(current_speaker)
-            current_text = ""
-        else:
-            current_text = (current_text + " " + part).strip() if current_text else part
-    if current_speaker is not None:
-        speakers.append({
-            "speaker_id": current_speaker,
-            "text": current_text.strip(),
-            "turn_order": len(speakers),
-        })
-    return {"speakers": speakers, "speaker_count": len(speaker_ids), "raw": text.strip()}
-
-
-def parse_timestamps(text):
-    ts_parts = re.split(r"\[T:(\d+)\]", text)
-    words = []
-    last_end = 0.0
-    offset = 0.0
-    word_parts = ts_parts[::2]
-    tag_parts = ts_parts[1::2]
-    for word_text, ts in zip(word_parts, tag_parts):
-        word_text = word_text.strip()
-        if not word_text:
-            continue
-        raw_time = float(ts) / 100.0
-        while raw_time + offset < last_end:
-            offset += 10.0
-        abs_time = raw_time + offset
-        last_end = abs_time
-        is_silence = word_text == "_"
-        words.append({
-            "text": word_text,
-            "end_time": round(abs_time, 2),
-            "is_silence": is_silence,
-        })
-    return {"words": words}
-
-
-_PUNCT = ".,!?;:\"'()[]"
-
-
-def parse_combined(saa_result, ts_result):
-    saa_turns = saa_result["speakers"]
-    ts_words = ts_result["words"]
-    saa_words_flat = []
-    saa_word_to_turn = []
-    for turn_idx, turn in enumerate(saa_turns):
-        for w in turn["text"].split():
-            saa_words_flat.append(w.lower().strip(_PUNCT))
-            saa_word_to_turn.append(turn["speaker_id"])
-    ts_words_norm = []
-    for w in ts_words:
-        ts_words_norm.append(w["text"].lower().strip(_PUNCT))
-    ts_non_silence = [(i, w) for i, w in enumerate(ts_words) if not w["is_silence"]]
-    ts_norm_non_silence = [ts_words_norm[i] for i, _ in ts_non_silence]
-    alignment_method = None
-    combined_words = []
-    if len(saa_words_flat) == len(ts_norm_non_silence):
-        alignment_method = "exact_match"
-        saa_idx = 0
-        last_speaker = None
-        for ts_w in ts_words:
-            if ts_w["is_silence"]:
-                speaker_id = last_speaker
-            else:
-                speaker_id = saa_word_to_turn[saa_idx]
-                saa_idx += 1
-                last_speaker = speaker_id
-            combined_words.append({
-                "text": ts_w["text"],
-                "end_time": ts_w["end_time"],
-                "is_silence": ts_w["is_silence"],
-                "speaker_id": speaker_id,
-            })
-    else:
-        alignment_method = "proportional_fallback"
-        total_saa_words = len(saa_words_flat)
-        total_ts_words = len(ts_norm_non_silence)
-        if total_saa_words == 0 or total_ts_words == 0:
-            alignment_method = "unaligned_fallback"
-            for ts_w in ts_words:
-                combined_words.append({
-                    "text": ts_w["text"],
-                    "end_time": ts_w["end_time"],
-                    "is_silence": ts_w["is_silence"],
-                    "speaker_id": None,
-                })
-        else:
-            ts_idx = 0
-            for turn_idx, turn in enumerate(saa_turns):
-                turn_word_count = len(turn["text"].split())
-                alloc = round(turn_word_count * total_ts_words / total_saa_words)
-                alloc = max(1, alloc)
-                allocated = 0
-                while ts_idx < len(ts_words) and allocated < alloc:
-                    ts_w = ts_words[ts_idx]
-                    combined_words.append({
-                        "text": ts_w["text"],
-                        "end_time": ts_w["end_time"],
-                        "is_silence": ts_w["is_silence"],
-                        "speaker_id": turn["speaker_id"],
-                    })
-                    ts_idx += 1
-                    if not ts_w["is_silence"]:
-                        allocated += 1
-            while ts_idx < len(ts_words):
-                ts_w = ts_words[ts_idx]
-                combined_words.append({
-                    "text": ts_w["text"],
-                    "end_time": ts_w["end_time"],
-                    "is_silence": ts_w["is_silence"],
-                    "speaker_id": saa_turns[-1]["speaker_id"] if saa_turns else None,
-                })
-                ts_idx += 1
-    return {
-        "words": combined_words,
-        "alignment_method": alignment_method,
-        "saa_word_count": len(saa_words_flat),
-        "ts_word_count": len(ts_norm_non_silence),
-    }
-
-
-# --- Tests ---
 
 def test_asr():
     result = parse_asr("hello world how are you")
@@ -196,7 +53,7 @@ def test_timestamp_rollover():
     assert result["words"][1]["end_time"] == 0.82
     # Silence marker
     assert result["words"][2]["text"] == "_"
-    assert result["words"][2]["is_silence"] == True
+    assert result["words"][2]["is_silence"] is True
     assert result["words"][2]["end_time"] == 9.5
     # Rollover: [T:50] = 0.5s + offset 10 = 10.5s
     assert result["words"][3]["text"] == "test"
@@ -248,7 +105,7 @@ def test_combined_exact_match():
     assert combined["words"][1]["speaker_id"] == 1
     # silence _ inherits speaker 1 (last non-silence speaker)
     assert combined["words"][2]["text"] == "_"
-    assert combined["words"][2]["is_silence"] == True
+    assert combined["words"][2]["is_silence"] is True
     assert combined["words"][2]["speaker_id"] == 1
     # test → speaker 2
     assert combined["words"][3]["text"] == "test"
@@ -257,6 +114,19 @@ def test_combined_exact_match():
     assert combined["words"][4]["text"] == "word"
     assert combined["words"][4]["speaker_id"] == 2
     print("✓ Combined exact match test passed")
+
+
+def test_combined_count_match_positional():
+    # Same word count but different content → count_match_positional
+    saa_text = "[Speaker 1]: hello world"
+    saa_result = parse_saa(saa_text)
+    ts_text = "hi [T:50] there [T:100]"
+    ts_result = parse_timestamps(ts_text)
+    combined = parse_combined(saa_result, ts_result)
+    assert combined["alignment_method"] == "count_match_positional"
+    assert combined["words"][0]["speaker_id"] == 1
+    assert combined["words"][1]["speaker_id"] == 1
+    print("✓ Combined count_match_positional test passed")
 
 
 def test_combined_proportional_fallback():
@@ -284,9 +154,6 @@ def test_combined_unaligned():
 
 
 def test_json_file_writing():
-    import os
-    import tempfile
-
     # Simulate the JSON output structure
     result = {
         "audio": {"path": "test.mp3", "duration": 10.0, "sample_rate": 16000, "channels": 1},
@@ -317,6 +184,7 @@ if __name__ == "__main__":
     test_timestamp_silence()
     test_timestamp_short_audio()
     test_combined_exact_match()
+    test_combined_count_match_positional()
     test_combined_proportional_fallback()
     test_combined_unaligned()
     test_json_file_writing()

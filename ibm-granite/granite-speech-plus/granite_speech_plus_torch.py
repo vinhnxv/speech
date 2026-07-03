@@ -23,7 +23,6 @@ https://github.com/huggingface/transformers).
 
 import json
 import os
-import re
 import sys
 import time
 
@@ -31,6 +30,10 @@ import soundfile as sf
 import torch
 import torchaudio
 from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
+
+# Ensure the script's directory is on the path for parsing.py import
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from parsing import parse_asr, parse_saa, parse_timestamps, parse_combined
 
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
@@ -142,218 +145,17 @@ def load_audio(path):
 
 
 # ---------------------------------------------------------------------------
-# Output parsers
-# ---------------------------------------------------------------------------
-
-def parse_asr(text):
-    """Parse plain ASR output — just a transcript string."""
-    return {"transcript": text.strip()}
-
-
-def parse_saa(text):
-    """Parse speaker-attributed ASR output into speaker turns.
-
-    Output format: [Speaker 1]: text [Speaker 2]: text ...
-    """
-    # Split on speaker tags, keeping the tags
-    parts = re.split(r"(\[Speaker \d+\]:)", text)
-    speakers = []
-    speaker_ids = set()
-    current_speaker = None
-    current_text = ""
-
-    for part in parts:
-        part = part.strip()
-        if not part:
-            continue
-        match = re.match(r"\[Speaker (\d+)\]:", part)
-        if match:
-            if current_speaker is not None:
-                speakers.append({
-                    "speaker_id": current_speaker,
-                    "text": current_text.strip(),
-                    "turn_order": len(speakers),
-                })
-            current_speaker = int(match.group(1))
-            speaker_ids.add(current_speaker)
-            current_text = ""
-        else:
-            current_text = (current_text + " " + part).strip() if current_text else part
-
-    if current_speaker is not None:
-        speakers.append({
-            "speaker_id": current_speaker,
-            "text": current_text.strip(),
-            "turn_order": len(speakers),
-        })
-
-    return {
-        "speakers": speakers,
-        "speaker_count": len(speaker_ids),
-        "raw": text.strip(),
-    }
-
-
-def parse_timestamps(text):
-    """Parse word-level timestamp output into per-word records.
-
-    Timestamps are in centiseconds mod 1000 (10s rollover).
-    N = round(t * 100) mod 1000; recover with t = N/100 + 10*R.
-    Silence is transcribed as `_`.
-    """
-    # re.split with capture group gives: [word0, tag0, word1, tag1, ..., trailing_word]
-    ts_parts = re.split(r"\[T:(\d+)\]", text)
-    words = []
-    last_end = 0.0
-    offset = 0.0
-
-    # ts_parts: even indices = word text, odd indices = timestamp numbers
-    word_parts = ts_parts[::2]
-    tag_parts = ts_parts[1::2]
-
-    for word_text, ts in zip(word_parts, tag_parts):
-        word_text = word_text.strip()
-        if not word_text:
-            continue
-
-        raw_time = float(ts) / 100.0
-        while raw_time + offset < last_end:
-            offset += 10.0
-        abs_time = raw_time + offset
-        last_end = abs_time
-
-        # Words can include silence markers `_`
-        is_silence = word_text == "_"
-
-        words.append({
-            "text": word_text,
-            "end_time": round(abs_time, 2),
-            "is_silence": is_silence,
-        })
-
-    return {"words": words}
-
-
-def parse_combined(saa_result, ts_result):
-    """Align speaker turns with word timings by text matching.
-
-    Runs SAA and timestamps separately, then aligns by normalizing word sequences.
-    """
-    saa_turns = saa_result["speakers"]
-    ts_words = ts_result["words"]
-
-    # Flatten SAA turns into a normalized word list (lowercase, no tags)
-    saa_words_flat = []
-    saa_word_to_turn = []  # maps flat index → turn index
-    for turn_idx, turn in enumerate(saa_turns):
-        for w in turn["text"].split():
-            saa_words_flat.append(w.lower().strip(".,!?;:\"'()[]"))
-            saa_word_to_turn.append(turn["speaker_id"])
-
-    # Normalize timestamp words (strip silence markers for alignment count)
-    ts_words_norm = []
-    for w in ts_words:
-        ts_words_norm.append(w["text"].lower().strip(".,!?;:\"'()[]"))
-
-    # Remove silence words from ts for alignment (they don't correspond to SAA words)
-    ts_non_silence = [(i, w) for i, w in enumerate(ts_words) if not w["is_silence"]]
-    ts_norm_non_silence = [ts_words_norm[i] for i, _ in ts_non_silence]
-
-    alignment_method = None
-    combined_words = []
-
-    if len(saa_words_flat) == len(ts_norm_non_silence):
-        # Exact word count match — map non-silence ts words to SAA words by index,
-        # and assign silence words the speaker of the preceding non-silence word.
-        alignment_method = "exact_match"
-        saa_idx = 0
-        last_speaker = None
-        for ts_w in ts_words:
-            if ts_w["is_silence"]:
-                speaker_id = last_speaker
-            else:
-                speaker_id = saa_word_to_turn[saa_idx]
-                saa_idx += 1
-                last_speaker = speaker_id
-            combined_words.append({
-                "text": ts_w["text"],
-                "end_time": ts_w["end_time"],
-                "is_silence": ts_w["is_silence"],
-                "speaker_id": speaker_id,
-            })
-    else:
-        # Proportional allocation: distribute ts words across saa turns by turn length ratio
-        alignment_method = "proportional_fallback"
-        total_saa_words = len(saa_words_flat)
-        total_ts_words = len(ts_norm_non_silence)
-
-        if total_saa_words == 0 or total_ts_words == 0:
-            # Can't align — return unaligned per-mode output
-            alignment_method = "unaligned_fallback"
-            for ts_w in ts_words:
-                combined_words.append({
-                    "text": ts_w["text"],
-                    "end_time": ts_w["end_time"],
-                    "is_silence": ts_w["is_silence"],
-                    "speaker_id": None,
-                })
-        else:
-            # Allocate ts words to turns proportionally
-            ts_idx = 0
-            for turn_idx, turn in enumerate(saa_turns):
-                turn_word_count = len(turn["text"].split())
-                # Proportional allocation
-                alloc = round(turn_word_count * total_ts_words / total_saa_words)
-                alloc = max(1, alloc)  # at least 1 word per turn if possible
-
-                allocated = 0
-                # Include any silence markers that fall within this turn's ts range
-                while ts_idx < len(ts_words) and allocated < alloc:
-                    ts_w = ts_words[ts_idx]
-                    combined_words.append({
-                        "text": ts_w["text"],
-                        "end_time": ts_w["end_time"],
-                        "is_silence": ts_w["is_silence"],
-                        "speaker_id": turn["speaker_id"],
-                    })
-                    ts_idx += 1
-                    if not ts_w["is_silence"]:
-                        allocated += 1
-
-            # Assign remaining ts words to last speaker
-            while ts_idx < len(ts_words):
-                ts_w = ts_words[ts_idx]
-                combined_words.append({
-                    "text": ts_w["text"],
-                    "end_time": ts_w["end_time"],
-                    "is_silence": ts_w["is_silence"],
-                    "speaker_id": saa_turns[-1]["speaker_id"] if saa_turns else None,
-                })
-                ts_idx += 1
-
-    return {
-        "words": combined_words,
-        "alignment_method": alignment_method,
-        "saa_word_count": len(saa_words_flat),
-        "ts_word_count": len(ts_norm_non_silence),
-    }
-
-
-# ---------------------------------------------------------------------------
 # JSON assembly
 # ---------------------------------------------------------------------------
 
 def build_json(mode, audio_path, sr, duration, raw_outputs, parsed, keywords, proc_time):
     """Construct the output JSON dict with all metadata fields."""
-    # Count channels from the loaded audio (always 1 after our mono conversion)
-    channels = 1
-
     result = {
         "audio": {
             "path": audio_path,
             "duration": round(duration, 2),
             "sample_rate": sr,
-            "channels": channels,
+            "channels": 1,  # always mono after our conversion
         },
         "session": {
             "model": MODEL_ID,
