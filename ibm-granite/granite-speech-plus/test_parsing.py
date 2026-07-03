@@ -30,6 +30,7 @@ def test_saa():
     assert result["speakers"][1]["turn_order"] == 1
     assert result["speakers"][2]["speaker_id"] == 1
     assert result["speakers"][2]["text"] == "great"
+    assert result["preamble"] == ""
     print("✓ SAA parse test passed")
 
 
@@ -39,6 +40,16 @@ def test_saa_single_speaker():
     assert result["speaker_count"] == 1
     assert result["speakers"][0]["speaker_id"] == 1
     print("✓ SAA single speaker test passed")
+
+
+def test_saa_preamble():
+    # Text before the first speaker tag should be captured in preamble
+    text = "hello there [Speaker 1]: hi"
+    result = parse_saa(text)
+    assert result["preamble"] == "hello there"
+    assert len(result["speakers"]) == 1
+    assert result["speakers"][0]["text"] == "hi"
+    print("✓ SAA preamble capture test passed")
 
 
 def test_timestamp_rollover():
@@ -66,6 +77,28 @@ def test_timestamp_rollover():
     print("✓ Timestamp rollover test passed")
 
 
+def test_timestamp_spurious_backward_jump():
+    # A small backward jump (< 5s) should NOT trigger a 10s offset
+    # [T:950] = 9.5s, [T:930] = 9.3s — only 0.2s backward, not a rollover
+    text = "word1 [T:950] word2 [T:930]"
+    result = parse_timestamps(text, duration=15.0)
+    assert result["words"][0]["end_time"] == 9.5
+    # word2 should NOT get a spurious 10s offset — should stay near 9.5s
+    assert result["words"][1]["end_time"] == 9.5  # floored to last_end
+    print("✓ Timestamp spurious backward jump (no false rollover) test passed")
+
+
+def test_timestamp_duration_bound():
+    # If unwrapped time exceeds duration + 5s, clamp to duration
+    text = "word1 [T:950] word2 [T:50] word3 [T:100]"
+    result = parse_timestamps(text, duration=12.0)
+    # word1 = 9.5s, word2 = 10.5s (rollover), word3 = 11.0s — all within duration
+    assert result["words"][0]["end_time"] == 9.5
+    assert result["words"][1]["end_time"] == 10.5
+    assert result["words"][2]["end_time"] == 11.0
+    print("✓ Timestamp duration bound test passed")
+
+
 def test_timestamp_silence():
     text = "hello [T:50] _ [T:80] world [T:120]"
     result = parse_timestamps(text)
@@ -84,6 +117,13 @@ def test_timestamp_short_audio():
     assert result["words"][1]["end_time"] == 1.0
     assert all(w["end_time"] < 10.0 for w in result["words"])
     print("✓ Timestamp short audio (no rollover) test passed")
+
+
+def test_timestamp_empty_input():
+    # No [T:N] tags → empty words list (not an error for experiment script)
+    result = parse_timestamps("no timestamps here")
+    assert result["words"] == []
+    print("✓ Timestamp empty input test passed")
 
 
 def test_combined_exact_match():
@@ -142,9 +182,26 @@ def test_combined_proportional_fallback():
     print("✓ Combined proportional fallback test passed")
 
 
+def test_combined_proportional_min_alloc():
+    # Ensure each turn gets at least 1 word when possible
+    # 3 turns, 3 ts words → each turn should get exactly 1
+    saa_text = "[Speaker 1]: hello world [Speaker 2]: test [Speaker 3]: foo bar"
+    saa_result = parse_saa(saa_text)
+    ts_text = "hello [T:50] test [T:100] foo [T:200]"
+    ts_result = parse_timestamps(ts_text)
+    combined = parse_combined(saa_result, ts_result)
+    assert combined["alignment_method"] == "proportional_fallback"
+    # Each turn should have at least 1 word
+    speakers_seen = [w["speaker_id"] for w in combined["words"]]
+    assert 1 in speakers_seen
+    assert 2 in speakers_seen
+    assert 3 in speakers_seen
+    print("✓ Combined proportional min alloc per turn test passed")
+
+
 def test_combined_unaligned():
     # Edge case: no SAA words
-    saa_result = {"speakers": [], "speaker_count": 0, "raw": ""}
+    saa_result = {"speakers": [], "speaker_count": 0, "preamble": "", "raw": ""}
     ts_text = "hello [T:50] world [T:100]"
     ts_result = parse_timestamps(ts_text)
     combined = parse_combined(saa_result, ts_result)
@@ -180,12 +237,17 @@ if __name__ == "__main__":
     test_asr()
     test_saa()
     test_saa_single_speaker()
+    test_saa_preamble()
     test_timestamp_rollover()
+    test_timestamp_spurious_backward_jump()
+    test_timestamp_duration_bound()
     test_timestamp_silence()
     test_timestamp_short_audio()
+    test_timestamp_empty_input()
     test_combined_exact_match()
     test_combined_count_match_positional()
     test_combined_proportional_fallback()
+    test_combined_proportional_min_alloc()
     test_combined_unaligned()
     test_json_file_writing()
     print("\n✅ All tests passed!")

@@ -233,7 +233,7 @@ def main():
         )
 
         saa_parsed = parse_saa(saa_raw)
-        ts_parsed = parse_timestamps(ts_raw)
+        ts_parsed = parse_timestamps(ts_raw, duration=duration)
         parsed = parse_combined(saa_parsed, ts_parsed)
         raw_outputs = {"saa": saa_raw, "timestamps": ts_raw}
 
@@ -261,7 +261,7 @@ def main():
             processor, model, audio_tensor, PROMPTS["timestamps"],
             max_new_tokens=MAX_NEW_TOKENS["timestamps"], keywords=keywords,
         )
-        parsed = parse_timestamps(raw)
+        parsed = parse_timestamps(raw, duration=duration)
         raw_outputs = raw
 
     proc_time = time.time() - start_time

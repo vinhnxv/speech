@@ -8,6 +8,11 @@ import re
 
 _PUNCT = ".,!?;:\"'()[]"
 
+# A real mod-1000 rollover jumps from near 10s to near 0s (a large backward gap).
+# A spurious backward jump (model error) is typically a small dip (< 5s).
+# Only add 10s when the gap is large enough to be a genuine rollover.
+_ROLLOVER_THRESHOLD = 5.0  # seconds
+
 
 def parse_asr(text):
     """Parse plain ASR output — just a transcript string."""
@@ -18,12 +23,14 @@ def parse_saa(text):
     """Parse speaker-attributed ASR output into speaker turns.
 
     Output format: [Speaker 1]: text [Speaker 2]: text ...
+    Text before the first speaker tag (if any) is captured in `preamble`.
     """
     parts = re.split(r"(\[Speaker \d+\]:)", text)
     speakers = []
     speaker_ids = set()
     current_speaker = None
     current_text = ""
+    preamble = ""
 
     for part in parts:
         part = part.strip()
@@ -37,6 +44,9 @@ def parse_saa(text):
                     "text": current_text.strip(),
                     "turn_order": len(speakers),
                 })
+            else:
+                # Text before the first speaker tag
+                preamble = current_text.strip()
             current_speaker = int(match.group(1))
             speaker_ids.add(current_speaker)
             current_text = ""
@@ -53,16 +63,23 @@ def parse_saa(text):
     return {
         "speakers": speakers,
         "speaker_count": len(speaker_ids),
+        "preamble": preamble,
         "raw": text.strip(),
     }
 
 
-def parse_timestamps(text):
+def parse_timestamps(text, duration=None):
     """Parse word-level timestamp output into per-word records.
 
     Timestamps are in centiseconds mod 1000 (10s rollover).
     N = round(t * 100) mod 1000; recover with t = N/100 + 10*R.
     Silence is transcribed as `_`.
+
+    Args:
+        text: Raw model output with [T:N] tags.
+        duration: Optional audio duration in seconds. When provided, used as a
+            sanity bound to detect spurious backward jumps vs genuine rollovers.
+            Only triggers a 10s offset when the backward gap exceeds _ROLLOVER_THRESHOLD.
     """
     ts_parts = re.split(r"\[T:(\d+)\]", text)
     words = []
@@ -78,10 +95,25 @@ def parse_timestamps(text):
             continue
 
         raw_time = float(ts) / 100.0
+
+        # Rollover detection: only add 10s when the backward gap is large enough
+        # to be a genuine mod-1000 rollover, not a small model error.
         while raw_time + offset < last_end:
+            gap = last_end - (raw_time + offset)
+            if gap < _ROLLOVER_THRESHOLD:
+                # Small backward jump — likely a model error, not a rollover.
+                # Floor to the previous end time to maintain monotonicity.
+                raw_time = last_end - offset
+                break
             offset += 10.0
+
         abs_time = raw_time + offset
         last_end = abs_time
+
+        # Duration sanity bound: if unwrapped time exceeds duration by >5s,
+        # it's likely a spurious rollover — clamp to duration.
+        if duration and abs_time > duration + _ROLLOVER_THRESHOLD:
+            abs_time = min(abs_time, duration)
 
         is_silence = word_text == "_"
 
@@ -156,12 +188,24 @@ def parse_combined(saa_result, ts_result):
                     "speaker_id": None,
                 })
         else:
-            ts_idx = 0
-            for turn in saa_turns:
-                turn_word_count = len(turn["text"].split())
-                alloc = round(turn_word_count * total_ts_words / total_saa_words)
-                alloc = max(1, alloc)
+            # Pre-compute per-turn allocations, ensuring each turn gets >=1 word
+            # until we run out of ts words.
+            turn_word_counts = [len(t["text"].split()) for t in saa_turns]
+            raw_allocs = [
+                max(1, round(tc * total_ts_words / total_saa_words))
+                for tc in turn_word_counts
+            ]
+            # Scale down if over-allocated
+            while sum(raw_allocs) > total_ts_words and len(raw_allocs) > 1:
+                # Reduce the largest allocation first
+                max_idx = raw_allocs.index(max(raw_allocs))
+                if raw_allocs[max_idx] > 1:
+                    raw_allocs[max_idx] -= 1
+                else:
+                    break
 
+            ts_idx = 0
+            for turn, alloc in zip(saa_turns, raw_allocs):
                 allocated = 0
                 while ts_idx < len(ts_words) and allocated < alloc:
                     ts_w = ts_words[ts_idx]
